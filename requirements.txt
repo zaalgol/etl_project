@@ -1,0 +1,5 @@
+pyspark
+boto3
+requests
+python-dotenv
+delta-spark
