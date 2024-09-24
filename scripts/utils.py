@@ -10,7 +10,7 @@ def get_continent(nationality, api_url):
         response = requests.get(f"{api_url}{nationality}")
         if response.status_code == 200:
             data = response.json()
-            return data['name']  # Assuming the API returns {'code': 'EU', 'name': 'Europe', ...}
+            return data['name']
         else:
             return 'Unknown'
     except Exception as e:
@@ -20,21 +20,22 @@ def get_continent(nationality, api_url):
 def broadcast_country_continent_mapping(spark, api_url):
     """
     Builds a broadcast variable containing the mapping of countries to continents.
+    Fetches the mapping from the provided API URL.
     """
-    # Fetch all countries from the API or database
-    # For simplicity, we'll create a static mapping here
-    country_continent = {
-        'Portugal': 'Europe',
-        'Argentina': 'South America',
-        'Brazil': 'South America',
-        'Uruguay': 'South America',
-        'Germany': 'Europe',
-        'Poland': 'Europe',
-        'Spain': 'Europe',
-        'Belgium': 'Europe',
-        'Chile': 'South America',
-        # Add more mappings as needed
-    }
+    try:
+        response = requests.get(api_url)
+
+        # Raise an exception if the request was not successful
+        response.raise_for_status()
+        
+        country_continent = response.json()
+
+    except requests.exceptions.RequestException as e:
+        # Handle any errors that occur during the request
+        print(f"Error fetching country-continent mapping: {e}")
+        return None
+
+    # Broadcast the mapping to all Spark nodes
     return spark.sparkContext.broadcast(country_continent)
 
 def udf_get_continent(country_continent_broadcast):

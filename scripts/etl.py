@@ -59,15 +59,6 @@ def main():
             logger.error("One or more environment variables are missing. Please check your .env file.")
             sys.exit(1)
 
-        # # Initialize Spark Session
-        # spark = SparkSession.builder \
-        #     .appName(SPARK_APP_NAME) \
-        #     .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1") \
-        #     .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY_ID) \
-        #     .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_ACCESS_KEY) \
-        #     .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
-        #     .getOrCreate()
-
         spark = SparkSession.builder \
             .appName(SPARK_APP_NAME) \
             .config("spark.local.dir", "C:/Users/zaalg/Documents") \
@@ -83,8 +74,6 @@ def main():
             .config("spark.executor.cores", "2") \
             .config("spark.cores.max", "4") \
             .getOrCreate()
-        
-        # spark.conf.set("spark.driver.extraJavaOptions", "-Dfile.encoding=UTF-8")
 
         logger.info("Spark session initialized.")
 

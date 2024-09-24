@@ -4,13 +4,12 @@ __pycache__/
 *$py.class
 
 # Environment variables
-config/.env
+.env
+
+config/emr.pem
 
 # Pytest cache
 .pytest_cache/
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints
 
 # Virtual environment
 .venv
@@ -19,3 +18,5 @@ config/.env
 .vscode
 
 output_parquet
+
+etl.log
