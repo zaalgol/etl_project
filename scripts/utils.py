@@ -2,21 +2,6 @@ import requests
 from pyspark.sql.types import StringType
 from pyspark.sql.functions import udf
 
-def get_continent(nationality, api_url):
-    """
-    Fetches the continent for a given nationality using the API.
-    """
-    try:
-        response = requests.get(f"{api_url}{nationality}")
-        if response.status_code == 200:
-            data = response.json()
-            return data['name']
-        else:
-            return 'Unknown'
-    except Exception as e:
-        print(f"Error fetching continent for {nationality}: {e}")
-        return 'Unknown'
-
 def broadcast_country_continent_mapping(spark, api_url):
     """
     Builds a broadcast variable containing the mapping of countries to continents.
