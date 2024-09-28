@@ -4,7 +4,7 @@ import logging
 import shutil
 import time
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, current_timestamp
+from pyspark.sql.functions import col, current_timestamp, regexp_replace
 from pyspark.sql.utils import AnalysisException
 from pyspark.sql import functions as F
 
@@ -116,6 +116,28 @@ def enrich_players_data(spark, players_df, api_url):
         logger.error(f"Failed to enrich players data: {e}")
         sys.exit(1)
 
+def convert_value_salary_to_numeric(df):
+    """
+    Converts the 'Value' and 'Salary' columns to numeric values.
+    """
+    try:
+        numeric_df = df.withColumn(
+            "Value",
+            F.when(col("Value").like('%M'), regexp_replace(col("Value"), '[€M]', '').cast("double") * 1000000)
+             .when(col("Value").like('%K'), regexp_replace(col("Value"), '[€K]', '').cast("double") * 1000)
+             .otherwise(regexp_replace(col("Value"), '[€]', '').cast("double"))
+        ).withColumn(
+            "Salary",
+            F.when(col("Salary").like('%M'), regexp_replace(col("Salary"), '[€M]', '').cast("double") * 1000000)
+             .when(col("Salary").like('%K'), regexp_replace(col("Salary"), '[€K]', '').cast("double") * 1000)
+             .otherwise(regexp_replace(col("Salary"), '[€]', '').cast("double"))
+        )
+        logger.info("Converted 'Value' and 'Salary' columns to numeric values.")
+        return numeric_df
+    except Exception as e:
+        logger.error(f"Failed to convert 'Value' and 'Salary' to numeric: {e}")
+        sys.exit(1)
+
 def deduplicate_data(df):
     """
     Deduplicates the DataFrame based on key columns (excluding 'updated_at').
@@ -166,8 +188,8 @@ def detect_changes(new_df, existing_df):
     if existing_df is None:
         return new_df
 
-    # Create a list of columns to compare (all except 'updated_at')
-    compare_columns = [col for col in new_df.columns if col not in ['updated_at', 'Club']]
+    # Create a list of columns to compare (all except 'Club', 'updated_at')
+    compare_columns = [col for col in new_df.columns if col not in ['Club', 'updated_at']]
 
     # Compare based on all columns except 'updated_at'
     updated_rows = new_df.alias('new').join(
@@ -203,15 +225,19 @@ def main():
         spark = initialize_spark()
 
         # Read players data
-        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats-101.csv')
+        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats-2.csv')
         players_df = read_players_data(spark, data_path)
 
         # Enrich data with continent information
         enriched_df = enrich_players_data(spark, players_df, API_URL)
 
-        # Add timestamp
-        df_with_timestamp = add_timestamp(enriched_df)
+        # Convert 'Value' and 'Salary' columns to numeric
+        numeric_df = convert_value_salary_to_numeric(enriched_df)
 
+        # Add timestamp
+        df_with_timestamp = add_timestamp(numeric_df)
+
+        # Deduplicate the data
         deduplicated_df = deduplicate_data(df_with_timestamp)
 
         # Define S3 output path
@@ -232,7 +258,7 @@ def main():
 
             # Load existing data for the current continent
             existing_df = load_existing_partition_data(spark, output_path, continent)
-            # logger.info("*" * 500 + f"  continent_df.count():{continent_df.count()}     existing_df.count():{existing_df.count()}")
+
             # Detect new or updated rows
             updated_rows = detect_changes(continent_df, existing_df)
 
