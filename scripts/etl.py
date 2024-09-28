@@ -17,7 +17,8 @@ from config.config import (
     AWS_SECRET_ACCESS_KEY,
     S3_OUTPUT_PATH,
     API_URL,
-    SPARK_APP_NAME
+    SPARK_APP_NAME,
+    SPARK_LOCAL_DIR
 )
 
 # Set PYSPARK environment variables
@@ -53,24 +54,43 @@ def cleanup_spark_temp_dir(spark):
     except Exception as e:
         logger.warning(f"Failed to delete temporary Spark directory {temp_dir}: {e}")
 
+def set_spark_config():
+    return SparkSession.builder \
+        .appName(SPARK_APP_NAME) \
+        .config("spark.local.dir", SPARK_LOCAL_DIR) \
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+        .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY_ID) \
+        .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_ACCESS_KEY) \
+        .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
+        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1") \
+        .config("spark.executor.memory", "8g") \
+        .config("spark.driver.memory", "4g")  \
+        .config("spark.executor.cores", "4")  \
+        .config("spark.cores.max", "16")  \
+        .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
+        .config("spark.hadoop.fs.s3a.block.size", "104857600")  \
+        .config("spark.hadoop.fs.s3a.fast.upload", "true")  \
+        .config("spark.hadoop.fs.s3a.connection.maximum", "1000") \
+        .config("spark.hadoop.fs.s3a.threads.max", "256") \
+        .config("spark.sql.shuffle.partitions", "200")  \
+        .config("spark.default.parallelism", "200")  \
+        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")  \
+        .config("spark.shuffle.compress", "true")  \
+        .config("spark.rdd.compress", "true")  \
+        .config("spark.memory.fraction", "0.6")  \
+        .config("spark.speculation", "true") \
+        .config("spark.dynamicAllocation.enabled", "true") \
+        .config("spark.dynamicAllocation.initialExecutors", "4") \
+        .config("spark.dynamicAllocation.minExecutors", "4") \
+        .config("spark.dynamicAllocation.maxExecutors", "16") \
+        .getOrCreate()
+
 def initialize_spark():
     """
     Initializes and returns a Spark session with necessary configurations.
     """
     try:
-        spark = SparkSession.builder \
-            .appName(SPARK_APP_NAME) \
-            .config("spark.local.dir", "C:/Users/zaalg/Documents") \
-            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .config("spark.hadoop.fs.s3a.access.key", AWS_ACCESS_KEY_ID) \
-            .config("spark.hadoop.fs.s3a.secret.key", AWS_SECRET_ACCESS_KEY) \
-            .config("spark.hadoop.fs.s3a.endpoint", "s3.amazonaws.com") \
-            .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1") \
-            .config("spark.executor.memory", "4g") \
-            .config("spark.driver.memory", "2g") \
-            .config("spark.executor.cores", "2") \
-            .config("spark.cores.max", "4") \
-            .getOrCreate()
+        spark = set_spark_config()
         
         logger.info("Spark session initialized.")
         spark.sparkContext.setLogLevel("INFO")
@@ -78,6 +98,8 @@ def initialize_spark():
     except Exception as e:
         logger.error(f"Failed to initialize Spark session: {e}")
         sys.exit(1)
+
+
 
 def read_players_data(spark, data_path):
     """
@@ -225,7 +247,7 @@ def main():
         spark = initialize_spark()
 
         # Read players data
-        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats-2.csv')
+        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats-10.csv')
         players_df = read_players_data(spark, data_path)
 
         # Enrich data with continent information
