@@ -6,6 +6,7 @@ import time
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp
 from pyspark.sql.utils import AnalysisException
+from pyspark.sql import functions as F
 
 # Import utility functions
 from scripts.utils import broadcast_country_continent_mapping, udf_get_continent
@@ -27,10 +28,7 @@ os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 logging.basicConfig(
     level=logging.INFO,  # Change to DEBUG for more detailed logs
     format='%(asctime)s %(levelname)s %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler("etl.log")
-    ]
+    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("etl.log")]
 )
 
 logger = logging.getLogger(__name__)
@@ -118,6 +116,20 @@ def enrich_players_data(spark, players_df, api_url):
         logger.error(f"Failed to enrich players data: {e}")
         sys.exit(1)
 
+def deduplicate_data(df):
+    """
+    Deduplicates the DataFrame based on key columns (excluding 'updated_at').
+    This ensures that rows with the same Name, Age, Nationality, Fifa Score, Club, etc., are considered duplicates.
+    """
+    try:
+        dedup_columns = [col for col in df.columns if col != 'updated_at']
+        deduplicated_df = df.dropDuplicates(dedup_columns)
+        logger.info(f"Deduplicated data. Rows after deduplication: {deduplicated_df.count()}")
+        return deduplicated_df
+    except Exception as e:
+        logger.error(f"Failed to deduplicate data: {e}")
+        sys.exit(1)
+
 def add_timestamp(df):
     """
     Adds an 'updated_at' timestamp column to the DataFrame.
@@ -146,22 +158,26 @@ def load_existing_partition_data(spark, output_path, continent):
         logger.error(f"Error reading existing data for {continent}: {e}")
         sys.exit(1)
 
-def merge_new_and_existing_data(existing_df, new_df, continent):
+def detect_changes(new_df, existing_df):
     """
-    Merges new data with the existing data by avoiding duplication of rows based on 'Name'.
+    Detects new or updated rows by comparing the new and existing data
+    based on all columns except 'updated_at'.
     """
-    try:
-        if existing_df is not None:
-            dedup_columns = [col for col in existing_df.columns if col != 'updated_at']
-            combined_df = existing_df.union(new_df).dropDuplicates(dedup_columns)
-            logger.info(f"Merged new and existing data for {continent}. Total rows after merge: {combined_df.count()}")
-        else:
-            combined_df = new_df
-            logger.info(f"No existing data for {continent}. Using new data with {new_df.count()} rows.")
-        return combined_df
-    except Exception as e:
-        logger.error(f"Failed to merge data for {continent}: {e}")
-        sys.exit(1)
+    if existing_df is None:
+        return new_df
+
+    # Create a list of columns to compare (all except 'updated_at')
+    compare_columns = [col for col in new_df.columns if col not in ['updated_at', 'Club']]
+
+    # Compare based on all columns except 'updated_at'
+    updated_rows = new_df.alias('new').join(
+        existing_df.alias('existing'),
+        on=compare_columns,
+        how='left_anti'  # Select rows in 'new_df' that are not in 'existing_df'
+    )
+
+    logger.info(f"Detected {updated_rows.count()} new/updated rows.")
+    return updated_rows
 
 def write_partition_data(df, output_path, continent):
     """
@@ -169,11 +185,11 @@ def write_partition_data(df, output_path, continent):
     """
     try:
         partition_path = os.path.join(output_path, f"Continent={continent}")
-        logger.info(f"Writing data for {continent} to {partition_path}. Number of partitions: {df.rdd.getNumPartitions()}")
-        df.coalesce(1).write.mode('overwrite').parquet(partition_path)
-        logger.info(f"Data for {continent} written successfully to {partition_path}.")
+        logger.info(f"Writing new data for {continent} to {partition_path}. Number of partitions: {df.rdd.getNumPartitions()}")
+        df.write.mode('append').parquet(partition_path)
+        logger.info(f"New data for {continent} written successfully to {partition_path}.")
     except Exception as e:
-        logger.error(f"Failed to write data for {continent}: {e}")
+        logger.error(f"Failed to write new data for {continent}: {e}")
         sys.exit(1)
 
 def main():
@@ -187,7 +203,7 @@ def main():
         spark = initialize_spark()
 
         # Read players data
-        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats.csv')
+        data_path = os.path.join('data', 'FIFA-18-Video-Game-Player-Stats-101.csv')
         players_df = read_players_data(spark, data_path)
 
         # Enrich data with continent information
@@ -195,6 +211,8 @@ def main():
 
         # Add timestamp
         df_with_timestamp = add_timestamp(enriched_df)
+
+        deduplicated_df = deduplicate_data(df_with_timestamp)
 
         # Define S3 output path
         output_path = S3_OUTPUT_PATH.strip()
@@ -204,22 +222,23 @@ def main():
         logger.info(f"Output Path: {output_path}")
 
         # Loop through each continent and update the data separately
-        continents = df_with_timestamp.select('Continent').distinct().rdd.flatMap(lambda x: x).collect()
+        continents = deduplicated_df.select('Continent').distinct().rdd.flatMap(lambda x: x).collect()
 
         for continent in continents:
             logger.info(f"Processing continent: {continent}")
 
             # Filter data for the current continent
-            continent_df = df_with_timestamp.filter(col('Continent') == continent)
+            continent_df = deduplicated_df.filter(col('Continent') == continent)
 
             # Load existing data for the current continent
             existing_df = load_existing_partition_data(spark, output_path, continent)
+            # logger.info("*" * 500 + f"  continent_df.count():{continent_df.count()}     existing_df.count():{existing_df.count()}")
+            # Detect new or updated rows
+            updated_rows = detect_changes(continent_df, existing_df)
 
-            # Merge new data with existing data
-            combined_df = merge_new_and_existing_data(existing_df, continent_df, continent)
-
-            # Write merged data back to S3
-            write_partition_data(combined_df, output_path, continent)
+            if updated_rows.count() > 0:
+                # Write only new or updated data back to S3
+                write_partition_data(updated_rows, output_path, continent)
 
         logger.info("ETL process completed successfully.")
 
